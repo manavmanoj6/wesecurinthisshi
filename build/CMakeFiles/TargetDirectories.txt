@@ -859,13 +859,6 @@ C:/Users/ASUS/wesecurinthisshi/build/esp-idf/jgromes__radiolib/CMakeFiles/list_i
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/jgromes__radiolib/CMakeFiles/install.dir
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/jgromes__radiolib/CMakeFiles/install/local.dir
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/jgromes__radiolib/CMakeFiles/install/strip.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/__idf_espressif__led_strip.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/edit_cache.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/rebuild_cache.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/list_install_components.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/install.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/install/local.dir
-C:/Users/ASUS/wesecurinthisshi/build/esp-idf/espressif__led_strip/CMakeFiles/install/strip.dir
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/main/CMakeFiles/__idf_main.dir
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/main/CMakeFiles/edit_cache.dir
 C:/Users/ASUS/wesecurinthisshi/build/esp-idf/main/CMakeFiles/rebuild_cache.dir

@@ -160,9 +160,7 @@ $<TARGET_FILE:__idf_json>
 $<TARGET_FILE:idf::ascon>
 $<TARGET_FILE:idf::PQClean>
 $<TARGET_FILE:idf::jgromes__radiolib>
-$<TARGET_FILE:idf::espressif__led_strip>
 $<TARGET_FILE:idf::main>
 $<TARGET_FILE:__idf_ascon>
 $<TARGET_FILE:__idf_PQClean>
 $<TARGET_FILE:__idf_jgromes__radiolib>
-$<TARGET_FILE:__idf_espressif__led_strip>

@@ -11084,7 +11084,6 @@ LOAD esp-idf/wifi_provisioning/libwifi_provisioning.a
 LOAD esp-idf/ascon/libascon.a
 LOAD esp-idf/PQClean/libPQClean.a
 LOAD esp-idf/jgromes__radiolib/libjgromes__radiolib.a
-LOAD esp-idf/espressif__led_strip/libespressif__led_strip.a
 LOAD esp-idf/main/libmain.a
 LOAD esp-idf/app_trace/libapp_trace.a
 LOAD esp-idf/unity/libunity.a
@@ -11097,7 +11096,6 @@ LOAD esp-idf/json/libjson.a
 LOAD esp-idf/ascon/libascon.a
 LOAD esp-idf/PQClean/libPQClean.a
 LOAD esp-idf/jgromes__radiolib/libjgromes__radiolib.a
-LOAD esp-idf/espressif__led_strip/libespressif__led_strip.a
 LOAD esp-idf/xtensa/libxtensa.a
 LOAD esp-idf/esp_driver_gpio/libesp_driver_gpio.a
 LOAD esp-idf/esp_pm/libesp_pm.a
