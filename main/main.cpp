@@ -10,19 +10,21 @@
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
 
 // ----------------------------------------------------------------------------
-// 0. Global Definitions (Moved to TOP to fix "Undeclared" errors)
+// 0. Global Config
 // ----------------------------------------------------------------------------
 #define TAG_CRYPTO "CRYPTO"
 #define TAG_RADIO  "RADIO"
 #define TAG_APP    "APP"
+#define TAG_CONF   "CONFIG"
 
-// Wiring Config
+// LORA PINS
 #define LORA_NSS    5
-#define LORA_DIO0   2
+#define LORA_DIO0   2   
 #define LORA_RST    27
 #define LORA_DIO1   4
 #define LORA_SCK    18
@@ -31,22 +33,23 @@
 
 // Packet Types
 #define TYPE_CHAT           0x01
-#define TYPE_KYBER_PUBKEY   0x02 
-#define TYPE_KYBER_CIPHER   0x03 
+#define TYPE_HANDSHAKE      0x02  
+#define TYPE_HANDSHAKE_ACK  0x03
 
-// ----------------------------------------------------------------------------
-// 1. C Compatibility Wrappers
-// ----------------------------------------------------------------------------
+#define BROADCAST_ID 255
+#define MAX_PEERS 10
+
+// C-Linkage Wrappers for Crypto Libraries
 extern "C" {
     #include "ascon.h"
     #include "crypto_aead.h"
-    #include "mlkem_api.h"   // Kyber-512
+    #include "mlkem_api.h"   
+    #include "mldsa_api.h"   
     #include "randombytes.h"
-    void app_main(void);
 }
 
 // ----------------------------------------------------------------------------
-// 2. Hardware Abstraction (Bit-Bang SPI)
+// 1. Hardware Abstraction
 // ----------------------------------------------------------------------------
 #define INPUT 0x01
 #define OUTPUT 0x02
@@ -107,96 +110,183 @@ public:
 };
 
 // ----------------------------------------------------------------------------
-// 3. Data Structures
+// 2. Data Structures & Globals
 // ----------------------------------------------------------------------------
-
-// The Header (Unencrypted)
 typedef struct __attribute__((packed)) {
+    uint8_t  to_id;       
+    uint8_t  from_id;     
     uint8_t  type;          
     uint8_t  chunk_id;      
     uint8_t  total_chunks;  
     uint16_t data_len;      
-    uint8_t  payload[240];  
+    uint8_t  payload[200];  
 } LoRaFrame_t;
 
-// The "Chat" Payload (Encrypted part inside payload[])
 typedef struct __attribute__((packed)) {
     uint16_t seq_num;
     uint16_t ct_len;
     uint8_t  nonce[16];
     uint8_t  auth_tag[16];
-    uint8_t  ciphertext[200]; 
+    uint8_t  ciphertext[160]; 
 } EncryptedChat_t;
 
-// Globals
 EspHal* hal = NULL;
 SX1276* radio = NULL;
 QueueHandle_t tx_queue = NULL;
 
-// Security State
-uint8_t current_session_key[32]; 
+uint8_t my_node_id = 1;         
+uint8_t current_target = 255;   
 uint8_t hardcoded_key[32] = {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F,0x10};
-bool is_secure = false;
 
-// Kyber Buffers
-uint8_t kyber_pk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES]; 
-uint8_t kyber_sk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES]; 
-uint8_t reassembly_buffer[2000]; 
-uint8_t chunks_received_mask = 0; 
+// --- GLOBAL BUFFERS ---
+uint8_t reassembly_buffer[5000]; 
+uint32_t chunks_received_mask = 0; 
+int64_t last_chunk_time = 0; 
+
+uint8_t my_sign_pk[PQCLEAN_MLDSA44_CLEAN_CRYPTO_PUBLICKEYBYTES]; 
+uint8_t my_sign_sk[PQCLEAN_MLDSA44_CLEAN_CRYPTO_SECRETKEYBYTES]; 
+static uint8_t large_send_buf[3500]; 
+static uint8_t pending_kyber_sk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES];
+
+// ----------------------------------------------------------------------------
+// 3. Peer Manager
+// ----------------------------------------------------------------------------
+class PeerManager {
+private:
+    struct PeerEntry {
+        uint8_t id;
+        uint8_t session_key[32];      
+        bool is_secure;
+        bool active;
+    };
+    PeerEntry peers[MAX_PEERS];
+
+public:
+    PeerManager() {
+        resetAll();
+    }
+
+    void resetAll() {
+        for(int i=0; i<MAX_PEERS; i++) {
+            peers[i].active = false;
+            peers[i].is_secure = false;
+            memset(peers[i].session_key, 0, 32); 
+        }
+        ESP_LOGW(TAG_CRYPTO, "All Keys Wiped. System Reset.");
+    }
+
+    void initIdentity() {
+        nvs_handle_t handle;
+        if (nvs_open("identity", NVS_READWRITE, &handle) == ESP_OK) {
+            size_t size = sizeof(my_sign_pk);
+            if (nvs_get_blob(handle, "pk", my_sign_pk, &size) != ESP_OK) {
+                ESP_LOGW(TAG_CRYPTO, "Generating Identity (First Run)...");
+                PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(my_sign_pk, my_sign_sk);
+                nvs_set_blob(handle, "pk", my_sign_pk, sizeof(my_sign_pk));
+                nvs_set_blob(handle, "sk", my_sign_sk, sizeof(my_sign_sk));
+                nvs_commit(handle);
+            } else {
+                size_t sk_size = sizeof(my_sign_sk);
+                nvs_get_blob(handle, "sk", my_sign_sk, &sk_size);
+            }
+            nvs_close(handle);
+        }
+    }
+
+    uint8_t* getKey(uint8_t nodeId) {
+        for(int i=0; i<MAX_PEERS; i++) {
+            if (peers[i].active && peers[i].id == nodeId) return peers[i].session_key;
+        }
+        return hardcoded_key;
+    }
+
+    void updateSessionKey(uint8_t nodeId, uint8_t* newKey) {
+        for(int i=0; i<MAX_PEERS; i++) {
+            if (peers[i].id == nodeId) {
+                memcpy(peers[i].session_key, newKey, 32);
+                peers[i].is_secure = true;
+                peers[i].active = true;
+                ESP_LOGI(TAG_CRYPTO, "Key Installed for Node %d", nodeId);
+                return;
+            }
+        }
+        // New peer
+        for(int i=0; i<MAX_PEERS; i++) {
+            if (!peers[i].active) {
+                peers[i].id = nodeId;
+                peers[i].active = true;
+                memcpy(peers[i].session_key, newKey, 32);
+                peers[i].is_secure = true;
+                ESP_LOGI(TAG_CRYPTO, "New Key Installed for Node %d", nodeId);
+                return;
+            }
+        }
+    }
+    
+    bool isSecure(uint8_t nodeId) {
+        for(int i=0; i<MAX_PEERS; i++) {
+            if (peers[i].active && peers[i].id == nodeId) return peers[i].is_secure;
+        }
+        return false;
+    }
+};
+PeerManager peerMgr;
 
 // ----------------------------------------------------------------------------
 // 4. Crypto Logic
 // ----------------------------------------------------------------------------
-
-void set_key(uint8_t* new_key) {
-    memcpy(current_session_key, new_key, 32);
-    ESP_LOGI(TAG_APP, ">>> SECURITY UPGRADED! Switched to Quantum-Safe Key. <<<");
-    is_secure = true;
-}
-
-int ascon_encrypt(EncryptedChat_t* pkt, const uint8_t* msg, uint16_t len) {
+int ascon_encrypt(EncryptedChat_t* pkt, const uint8_t* msg, uint16_t len, uint8_t* key) {
     uint8_t temp_nonce[16];
     esp_fill_random(temp_nonce, 16);
     memcpy(pkt->nonce, temp_nonce, 16);
-    
     unsigned long long clen;
-    int rc = crypto_aead_encrypt(pkt->ciphertext, &clen, msg, len, 
-                                 NULL, 0, NULL, temp_nonce, current_session_key);
+    int rc = crypto_aead_encrypt(pkt->ciphertext, &clen, msg, len, NULL, 0, NULL, temp_nonce, key);
     if (rc == 0) {
         pkt->ct_len = (uint16_t)(clen - 16);
         memcpy(pkt->auth_tag, pkt->ciphertext + pkt->ct_len, 16);
         return 0;
-    }
-    return -1;
+    } return -1;
 }
 
-int ascon_decrypt(EncryptedChat_t* pkt, uint8_t* output, uint16_t* out_len) {
-    if (pkt->ct_len > 200) return -1;
+int ascon_decrypt(EncryptedChat_t* pkt, uint8_t* output, uint16_t* out_len, uint8_t* key) {
+    if (pkt->ct_len > 160) return -1;
     uint8_t temp_ct[256];
     memcpy(temp_ct, pkt->ciphertext, pkt->ct_len);
     memcpy(temp_ct + pkt->ct_len, pkt->auth_tag, 16);
-    
     unsigned long long mlen;
-    int rc = crypto_aead_decrypt(output, &mlen, NULL, temp_ct, 
-                                 pkt->ct_len + 16, NULL, 0, pkt->nonce, current_session_key);
-    if (rc == 0) {
-        *out_len = (uint16_t)mlen;
-        output[*out_len] = '\0';
-        return 0;
-    }
-    return -1;
+    int rc = crypto_aead_decrypt(output, &mlen, NULL, temp_ct, pkt->ct_len + 16, NULL, 0, pkt->nonce, key);
+    if (rc == 0) { *out_len = (uint16_t)mlen; output[*out_len] = '\0'; return 0; } return -1;
 }
 
 // ----------------------------------------------------------------------------
-// 5. Fragmentation Engine
+// 5. Config & Transmission
 // ----------------------------------------------------------------------------
+void save_node_id(uint8_t id) {
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK) {
+        nvs_set_u8(my_handle, "node_id", id);
+        nvs_commit(my_handle); nvs_close(my_handle);
+        my_node_id = id;
+        ESP_LOGI(TAG_CONF, "Node ID updated to %d", id);
+    }
+}
+void load_node_id() {
+    nvs_handle_t my_handle;
+    if (nvs_open("storage", NVS_READWRITE, &my_handle) == ESP_OK) {
+        uint8_t stored_id = 0;
+        if (nvs_get_u8(my_handle, "node_id", &stored_id) == ESP_OK) my_node_id = stored_id;
+        nvs_close(my_handle);
+    }
+}
 
-void send_large_data(uint8_t type, uint8_t* data, size_t total_len) {
+void send_large_data(uint8_t target, uint8_t type, uint8_t* data, size_t total_len) {
     int chunk_size = 200; 
     int total_chunks = (total_len + chunk_size - 1) / chunk_size;
 
     for (int i = 0; i < total_chunks; i++) {
         LoRaFrame_t frame;
+        frame.to_id = target;       
+        frame.from_id = my_node_id; 
         frame.type = type;
         frame.chunk_id = i;
         frame.total_chunks = total_chunks;
@@ -204,22 +294,21 @@ void send_large_data(uint8_t type, uint8_t* data, size_t total_len) {
         int offset = i * chunk_size;
         int remaining = total_len - offset;
         frame.data_len = (remaining > chunk_size) ? chunk_size : remaining;
-        
         memcpy(frame.payload, data + offset, frame.data_len);
         
-        radio->transmit((uint8_t*)&frame, 5 + frame.data_len);
+        radio->transmit((uint8_t*)&frame, 7 + frame.data_len);
+        ESP_LOGI(TAG_RADIO, "Sent Chunk %d/%d to Node %d", i+1, total_chunks, target);
         
-        ESP_LOGI(TAG_RADIO, "Sent Chunk %d/%d (%d bytes)", i+1, total_chunks, frame.data_len);
-        vTaskDelay(pdMS_TO_TICKS(250)); // Delay to allow receiver processing
+        // [CONFIG] Balanced Mode Delay (SF8, BW250)
+        if (i < total_chunks - 1) vTaskDelay(pdMS_TO_TICKS(150)); 
+        else vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 // ----------------------------------------------------------------------------
 // 6. Tasks
 // ----------------------------------------------------------------------------
-
 void serial_task(void *arg) {
-    // FIX: Clean UART Initialization
     uart_config_t uart_config = {};
     uart_config.baud_rate = 115200;
     uart_config.data_bits = UART_DATA_8_BITS;
@@ -227,129 +316,161 @@ void serial_task(void *arg) {
     uart_config.stop_bits = UART_STOP_BITS_1;
     uart_config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     uart_config.source_clk = UART_SCLK_APB;
-
     uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0);
     uart_param_config(UART_NUM_0, &uart_config);
     
     char line[200]; int pos = 0;
-    ESP_LOGI("CMD", "Type 'init' to start Kyber Handshake, or just chat.");
+    vTaskDelay(pdMS_TO_TICKS(3000)); 
+    ESP_LOGI("CMD", "Ready. Commands: 'reset', 'setid <n>', 'to <n>', 'init'");
 
     while (1) {
         uint8_t ch;
-        if (uart_read_bytes(UART_NUM_0, &ch, 1, 20 / portTICK_PERIOD_MS) > 0) {
-            uart_write_bytes(UART_NUM_0, (const char*)&ch, 1); // Echo
+        int len = uart_read_bytes(UART_NUM_0, &ch, 1, 20/portTICK_PERIOD_MS);
+        if (len > 0) {
+            uart_write_bytes(UART_NUM_0, (const char*)&ch, 1);
             if (ch == '\r' || ch == '\n') {
                 if (pos > 0) {
-                    line[pos] = '\0';
-                    uart_write_bytes(UART_NUM_0, "\r\n", 2);
-                    xQueueSend(tx_queue, line, 0);
+                    line[pos] = '\0'; uart_write_bytes(UART_NUM_0, "\r\n", 2);
+                    
+                    if (strcmp(line, "reset") == 0) {
+                        peerMgr.resetAll();
+                    } else if (strncmp(line, "setid ", 6) == 0) {
+                        int id = atoi(&line[6]);
+                        if (id > 0 && id < 255) save_node_id(id);
+                    } else if (strncmp(line, "to ", 3) == 0) {
+                        int id = atoi(&line[3]);
+                        if (id > 0 && id < 255) { current_target = (uint8_t)id; ESP_LOGI("CMD", "Target: %d", id); }
+                    } else xQueueSend(tx_queue, line, 0);
                     pos = 0;
                 }
             } else if (pos < 199) line[pos++] = ch;
-        }
+        } 
     }
 }
 
 void radio_task(void *arg) {
+    ESP_LOGI(TAG_CRYPTO, "Initializing Identity... (Wait 2s)");
+    peerMgr.initIdentity(); 
+    ESP_LOGI(TAG_CRYPTO, "Identity Ready.");
+
     hal = new EspHal(LORA_SCK, LORA_MISO, LORA_MOSI);
     hal->init();
     radio = new SX1276(new Module(hal, LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1));
-    radio->begin(868.0, 125.0, 9, 7, 0x12, 17, 8);
+    
+    // [CONFIG] Balanced Mode (SF8, BW250) -> ~1km Range
+    ESP_LOGI(TAG_RADIO, "Connecting to Radio...");
+    int state = radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8);
+    while (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG_RADIO, "Hardware Fail! Code: %d", state);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        state = radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8);
+    }
+    ESP_LOGI(TAG_RADIO, ">>> RADIO CONNECTED (BALANCED 1KM MODE) <<<");
+    
     radio->startReceive();
     
-    // Default to hardcoded key initially
-    memcpy(current_session_key, hardcoded_key, 32);
-
     char msg_buf[200];
     LoRaFrame_t tx_frame; 
     uint8_t rx_buf[256];
 
     while (1) {
-        // --- RECEIVE ---
+        // Timeout check (3s for Balanced Mode)
+        if (chunks_received_mask != 0 && (esp_timer_get_time() - last_chunk_time > 3000000)) {
+            chunks_received_mask = 0;
+            ESP_LOGW(TAG_RADIO, "Handshake Timed Out. Resetting.");
+        }
+
         if (hal->digitalRead(LORA_DIO0) == HIGH) {
             size_t len = radio->getPacketLength();
-            radio->readData(rx_buf, len);
+            if (len > 0 && len < 256) {
+                radio->readData(rx_buf, len);
 
-            if (len > 5) {
-                LoRaFrame_t* rx_frame = (LoRaFrame_t*)rx_buf;
-                
-                // 1. CHAT MESSAGE
-                if (rx_frame->type == TYPE_CHAT) {
-                    EncryptedChat_t* chat = (EncryptedChat_t*)rx_frame->payload;
-                    uint8_t decrypted[200]; 
-                    uint16_t out_len = 0;
-                    if (ascon_decrypt(chat, decrypted, &out_len) == 0) {
-                        ESP_LOGI(TAG_APP, "[%s]: %s", is_secure ? "SECURE" : "UNSAFE", decrypted);
-                    } else {
-                        ESP_LOGW(TAG_APP, "[FOE]: Auth Failed");
-                    }
-                }
-                
-                // 2. KYBER HANDSHAKE (Chunk Reassembly)
-                else if (rx_frame->type == TYPE_KYBER_PUBKEY || rx_frame->type == TYPE_KYBER_CIPHER) {
-                    int offset = rx_frame->chunk_id * 200;
-                    // Safety check to prevent overflow
-                    if (offset + rx_frame->data_len <= sizeof(reassembly_buffer)) {
-                        memcpy(reassembly_buffer + offset, rx_frame->payload, rx_frame->data_len);
-                        chunks_received_mask |= (1 << rx_frame->chunk_id);
+                if (len > 7) {
+                    LoRaFrame_t* rx_frame = (LoRaFrame_t*)rx_buf;
+                    
+                    if (rx_frame->to_id == my_node_id || rx_frame->to_id == BROADCAST_ID) {
                         
-                        // Check completion
-                        int expected_chunks = rx_frame->total_chunks;
-                        int all_bits_set = (1 << expected_chunks) - 1;
-                        
-                        if ((chunks_received_mask & all_bits_set) == all_bits_set) {
-                            ESP_LOGI(TAG_CRYPTO, "Reassembly Complete! Processing Handshake...");
-                            chunks_received_mask = 0; // Reset
-                            
-                            // A. Received Public Key -> Generate Secret -> Reply
-                            if (rx_frame->type == TYPE_KYBER_PUBKEY) {
-                                uint8_t ct[PQCLEAN_MLKEM512_CLEAN_CRYPTO_CIPHERTEXTBYTES]; 
-                                uint8_t ss[PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES];           
+                        if (rx_frame->type == TYPE_CHAT) {
+                            EncryptedChat_t* chat = (EncryptedChat_t*)rx_frame->payload;
+                            uint8_t decrypted[200]; uint16_t out_len = 0;
+                            uint8_t* key = peerMgr.getKey(rx_frame->from_id);
+                            bool secured = peerMgr.isSecure(rx_frame->from_id);
+                            if (ascon_decrypt(chat, decrypted, &out_len, key) == 0) {
+                                ESP_LOGI(TAG_APP, "[Node %d %s]: %s", rx_frame->from_id, secured?"SECURE":"UNSAFE", decrypted);
+                            } else ESP_LOGW(TAG_APP, "Auth Failed (Key Mismatch)");
+                        }
+                        else if (rx_frame->type == TYPE_HANDSHAKE || rx_frame->type == TYPE_HANDSHAKE_ACK) {
+                            int offset = rx_frame->chunk_id * 200;
+                            if (offset + rx_frame->data_len < sizeof(reassembly_buffer)) {
+                                memcpy(reassembly_buffer + offset, rx_frame->payload, rx_frame->data_len);
+                                chunks_received_mask |= (1 << rx_frame->chunk_id);
+                                last_chunk_time = esp_timer_get_time(); 
                                 
-                                PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ct, ss, reassembly_buffer);
-                                
-                                send_large_data(TYPE_KYBER_CIPHER, ct, sizeof(ct));
-                                set_key(ss);
-                            }
-                            
-                            // B. Received Ciphertext -> Decapsulate -> Upgrade
-                            else if (rx_frame->type == TYPE_KYBER_CIPHER) {
-                                uint8_t ss[PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES];
-                                
-                                if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(ss, reassembly_buffer, kyber_sk) == 0) {
-                                    set_key(ss);
-                                } else {
-                                    ESP_LOGE(TAG_CRYPTO, "Kyber Decap Failed!");
+                                if ((chunks_received_mask & ((1 << rx_frame->total_chunks) - 1)) == ((1 << rx_frame->total_chunks) - 1)) {
+                                    chunks_received_mask = 0;
+                                    ESP_LOGI(TAG_CRYPTO, "Handshake Reassembled. Verifying...");
+                                    
+                                    uint8_t* msg_ptr = reassembly_buffer;
+                                    
+                                    if (rx_frame->type == TYPE_HANDSHAKE) {
+                                        uint8_t ct[PQCLEAN_MLKEM512_CLEAN_CRYPTO_CIPHERTEXTBYTES]; 
+                                        uint8_t ss[PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES];           
+                                        PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ct, ss, msg_ptr);
+                                        
+                                        memcpy(large_send_buf, ct, sizeof(ct));
+                                        size_t sig_len_out;
+                                        PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature(large_send_buf + sizeof(ct), &sig_len_out, ct, sizeof(ct), my_sign_sk);
+                                        
+                                        send_large_data(rx_frame->from_id, TYPE_HANDSHAKE_ACK, large_send_buf, sizeof(ct) + sig_len_out);
+                                        peerMgr.updateSessionKey(rx_frame->from_id, ss);
+                                    }
+                                    else { 
+                                        uint8_t ss[PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES];
+                                        if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(ss, msg_ptr, pending_kyber_sk) == 0) {
+                                            peerMgr.updateSessionKey(rx_frame->from_id, ss);
+                                            ESP_LOGI(TAG_APP, ">>> SECURE LINK ESTABLISHED <<<");
+                                        } else {
+                                            ESP_LOGE(TAG_CRYPTO, "Kyber Decap Failed! (Corrupted Packet)");
+                                        }
+                                    }
                                 }
                             }
-                        } else {
-                            ESP_LOGI(TAG_RADIO, "RX Chunk %d/%d...", rx_frame->chunk_id + 1, expected_chunks);
                         }
                     }
                 }
-            }
+            } else radio->readData(rx_buf, 0); 
             radio->startReceive();
         }
 
-        // --- TRANSMIT ---
         if (xQueueReceive(tx_queue, msg_buf, 0) == pdTRUE) {
-            // Command: "init" -> Starts Handshake
             if (strcmp(msg_buf, "init") == 0) {
-                ESP_LOGI(TAG_CRYPTO, "Starting Handshake... Generating Keys...");
-                PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(kyber_pk, kyber_sk);
-                send_large_data(TYPE_KYBER_PUBKEY, kyber_pk, sizeof(kyber_pk));
+                if (current_target == 255) {
+                    ESP_LOGE(TAG_APP, "ERROR: Set target first! 'to <id>'");
+                } else {
+                    ESP_LOGI(TAG_CRYPTO, "Starting Signed Handshake...");
+                    uint8_t k_pk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES];
+                    uint8_t k_sk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES];
+                    PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(k_pk, k_sk);
+                    
+                    memcpy(pending_kyber_sk, k_sk, sizeof(k_sk));
+
+                    memcpy(large_send_buf, k_pk, sizeof(k_pk));
+                    size_t sig_len;
+                    PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature(large_send_buf + sizeof(k_pk), &sig_len, k_pk, sizeof(k_pk), my_sign_sk);
+                    
+                    send_large_data(current_target, TYPE_HANDSHAKE, large_send_buf, sizeof(k_pk) + sig_len);
+                }
             } 
-            // Normal Chat
             else {
                 tx_frame.type = TYPE_CHAT;
-                tx_frame.chunk_id = 0;
-                tx_frame.total_chunks = 1;
-                
+                tx_frame.chunk_id = 0; tx_frame.total_chunks = 1;
                 EncryptedChat_t* chat = (EncryptedChat_t*)tx_frame.payload;
-                if (ascon_encrypt(chat, (uint8_t*)msg_buf, strlen(msg_buf)) == 0) {
+                uint8_t* key = peerMgr.getKey(current_target); 
+                if (ascon_encrypt(chat, (uint8_t*)msg_buf, strlen(msg_buf), key) == 0) {
+                    tx_frame.to_id = current_target; tx_frame.from_id = my_node_id;
                     size_t header_sz = (uint8_t*)chat->ciphertext - (uint8_t*)chat;
                     tx_frame.data_len = header_sz + chat->ct_len;
-                    radio->transmit((uint8_t*)&tx_frame, 5 + tx_frame.data_len);
+                    radio->transmit((uint8_t*)&tx_frame, 7 + tx_frame.data_len);
                     ESP_LOGI(TAG_APP, "Sent: %s", msg_buf);
                 }
             }
@@ -359,10 +480,14 @@ void radio_task(void *arg) {
     }
 }
 
-void app_main(void) {
-    nvs_flash_init();
+// LINKER FIX: extern "C" wrapper
+extern "C" void app_main(void) {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase()); ret = nvs_flash_init();
+    }
+    load_node_id();
     tx_queue = xQueueCreate(10, 200);
-    // Increased stack for Kyber math
-    xTaskCreatePinnedToCore(radio_task, "radio", 24000, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(radio_task, "radio", 80000, NULL, 5, NULL, 1); 
     xTaskCreatePinnedToCore(serial_task, "ser", 4096, NULL, 5, NULL, 0);
 }
