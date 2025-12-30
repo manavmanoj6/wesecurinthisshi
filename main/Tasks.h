@@ -72,8 +72,13 @@ void radio_task(void *arg) {
     peerMgr.initIdentity();
     hal = new EspHal(LORA_SCK, LORA_MISO, LORA_MOSI); hal->init();
     radio = new SX1276(new Module(hal, LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1));
-    ESP_LOGI(TAG_RADIO, "Connecting...");
-    while (radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8) != RADIOLIB_ERR_NONE) vTaskDelay(pdMS_TO_TICKS(1000));
+   ESP_LOGI(TAG_RADIO, "Connecting...");
+    int state = radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8);
+    while (state != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG_RADIO, "Connection Failed! Error Code: %d", state);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        state = radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8);
+    }
     ESP_LOGI(TAG_RADIO, ">>> RADIO READY <<<");
     radio->startReceive();
 
