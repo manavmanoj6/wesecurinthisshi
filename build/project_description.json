@@ -1,7 +1,7 @@
 {
     "version":            "1.2",
     "project_name":       "wesecurinthisshi",
-    "project_version":    "5730d5e-dirty",
+    "project_version":    "84ffc07-dirty",
     "project_path":       "C:/Users/ASUS/wesecurinthisshi",
     "idf_path":           "C:/Users/ASUS/esp/v5.5.1/esp-idf",
     "build_dir":          "C:/Users/ASUS/wesecurinthisshi/build",
@@ -880,7 +880,7 @@
             "managed_reqs": [],
             "managed_priv_reqs": [],
             "file": "C:/Users/ASUS/wesecurinthisshi/build/esp-idf/esp_netif/libesp_netif.a",
-            "sources": [ "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_handlers.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_objects.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_defaults.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_lwip.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_sntp.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_lwip_defaults.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/wlanif.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/ethernetif.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/esp_pbuf_ref.c" ],
+            "sources": [ "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_handlers.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_objects.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/esp_netif_defaults.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_lwip.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_sntp.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_lwip_defaults.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/wlanif.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/ethernetif.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/esp_pbuf_ref.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/esp_netif_lwip_ppp.c", "C:/Users/ASUS/esp/v5.5.1/esp-idf/components/esp_netif/lwip/netif/ppp.c" ],
             "include_dirs": [ "include" ]
         },
         "esp_netif_stack": {
