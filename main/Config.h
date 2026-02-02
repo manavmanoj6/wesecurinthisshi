@@ -17,42 +17,23 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 
+// --- LOGGING TAGS ---
 #define TAG_CRYPTO "CRYPTO"
 #define TAG_RADIO  "RADIO"
 #define TAG_APP    "APP"
 #define TAG_CONF   "CONFIG"
 
-// ----------------------------------------------------------------------------
-// PIN CONFIGURATION
-// Uncomment the board you are currently flashing:
-// ----------------------------------------------------------------------------
+// --- PIN MAPPING (Standard ESP32 VSPI) ---
+// Connect your LoRa Module to these pins:
+#define LORA_SCK    18
+#define LORA_MOSI   23
+#define LORA_MISO   19
+#define LORA_NSS    5   // Chip Select (CS)
+#define LORA_RST    14  // Reset
+#define LORA_DIO0   26  // Interrupt (IRQ)
+#define LORA_DIO1   RADIOLIB_NC // Not used
 
-#define BOARD_CROWPANEL   // <--- Uncomment this for the Display Board
-//#define BOARD_STANDARD    // <--- Uncomment this for the Regular ESP32
-
-// ----------------------------------------------------------------------------
-#ifdef BOARD_CROWPANEL
-    // MAPPING FOR CROWPANEL 2.4" (Expansion Ports)
-    #define LORA_SCK    22
-    #define LORA_MOSI   21
-    #define LORA_MISO   16
-    #define LORA_NSS    17
-    #define LORA_RST    32  
-    #define LORA_DIO0   25
-    #define LORA_DIO1   RADIOLIB_NC 
-#endif
-
-#ifdef BOARD_STANDARD
-    // MAPPING FOR STANDARD ESP32 (Best Performance / VSPI)
-    #define LORA_SCK    18
-    #define LORA_MOSI   23
-    #define LORA_MISO   19
-    #define LORA_NSS    5
-    #define LORA_RST    14
-    #define LORA_DIO0   26
-    #define LORA_DIO1   RADIOLIB_NC 
-#endif
-
+// --- NETWORK CONSTANTS ---
 #define TYPE_CHAT 0x01
 #define TYPE_HANDSHAKE 0x02
 #define TYPE_HANDSHAKE_ACK 0x03
@@ -60,6 +41,12 @@
 #define BROADCAST_ID 255
 #define MAX_PEERS 10
 
+// --- MULTICAST CONFIG ---
+#define MIN_GROUP_ID 200
+#define MAX_GROUP_ID 250
+#define IS_GROUP(id) (id >= MIN_GROUP_ID && id <= MAX_GROUP_ID)
+
+// --- EXTERNAL LIBS ---
 extern "C" {
     #include "ascon.h"
     #include "crypto_aead.h"
@@ -68,12 +55,23 @@ extern "C" {
     #include "randombytes.h"
 }
 
+// --- PACKET STRUCTURES ---
 typedef struct __attribute__((packed)) {
-    uint8_t to_id; uint8_t from_id; uint8_t type; uint8_t chunk_id; uint8_t total_chunks; uint16_t data_len; uint8_t payload[200];
+    uint8_t to_id; 
+    uint8_t from_id; 
+    uint8_t type; 
+    uint8_t chunk_id; 
+    uint8_t total_chunks; 
+    uint16_t data_len; 
+    uint8_t payload[200];
 } LoRaFrame_t;
 
 typedef struct __attribute__((packed)) {
-    uint16_t seq_num; uint16_t ct_len; uint8_t nonce[16]; uint8_t auth_tag[16]; uint8_t ciphertext[160];
+    uint16_t seq_num; 
+    uint16_t ct_len; 
+    uint8_t nonce[16]; 
+    uint8_t auth_tag[16]; 
+    uint8_t ciphertext[160];
 } EncryptedChat_t;
 
 #endif

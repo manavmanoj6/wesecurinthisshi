@@ -1,0 +1,48 @@
+# -----------------------------
+# 1. ESP-IDF Build & dependency files
+# -----------------------------
+# The build directory contains all compiled binaries (100s of MBs)
+build/
+
+# Managed components (downloaded libraries)
+managed_components/
+dependencies.lock
+
+# -----------------------------
+# 2. Configuration Files
+# -----------------------------
+# sdkconfig: Includes specific setup for your machine.
+# Recommended: Keep 'sdkconfig.defaults' in git, ignore 'sdkconfig'
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+
+# -----------------------------
+# 3. IDE & System Files
+# -----------------------------
+# VS Code settings (often contain absolute paths to your compiler)
+.vscode/
+.idea/
+
+# Windows/Mac system junk
+.DS_Store
+Thumbs.db
+
+# -----------------------------
+# 4. Python & Compilation Artifacts
+# -----------------------------
+__pycache__/
+*.pyc
+*.bin
+*.elf
+*.map
+*.hex
+
+# -----------------------------
+# 5. Security (Critical)
+# -----------------------------
+# Never upload private keys or certificate authorities
+*.pem
+*.key
+client_cert.js
+client_key.js

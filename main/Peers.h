@@ -3,6 +3,7 @@
 
 #include "Config.h"
 
+#define IS_GROUP_ID(id) (id >= 200 && id <= 250)
 // --- FIX: Extern declarations WITH SIZES so 'sizeof' works ---
 extern uint8_t my_sign_pk[PQCLEAN_MLDSA44_CLEAN_CRYPTO_PUBLICKEYBYTES];
 extern uint8_t my_sign_sk[PQCLEAN_MLDSA44_CLEAN_CRYPTO_SECRETKEYBYTES];
@@ -17,21 +18,27 @@ private:
         bool is_secure;
         bool active;
     };
+
+    // NEW: Structure to hold a "Contact List" for a group
+    struct GroupEntry {
+        uint8_t id;             // The Group ID (e.g., 201)
+        uint8_t members[10];    // Max 10 members per group
+        uint8_t count;          // How many members currently in it
+        bool active;
+    };
+
     PeerEntry peers[MAX_PEERS];
+    GroupEntry groups[5]; // Allow up to 5 different groups
 
 public:
-    PeerManager() {
-        resetAll();
-    }
+   PeerManager() { resetAll(); }
 
     void resetAll() {
-        for(int i=0; i<MAX_PEERS; i++) {
-            peers[i].active = false;
-            peers[i].is_secure = false;
-            memset(peers[i].session_key, 0, 32); 
-        }
-        ESP_LOGW(TAG_CRYPTO, "All Keys Wiped. System Reset.");
+        for(int i=0; i<MAX_PEERS; i++) { peers[i].active = false; peers[i].is_secure = false; }
+        // Reset Groups
+        for(int i=0; i<5; i++) { groups[i].active = false; groups[i].count = 0; }
     }
+
 
     void initIdentity() {
         nvs_handle_t handle;
@@ -84,6 +91,49 @@ public:
         }
     }
     
+    // --- NEW: Group Management Functions ---
+
+    // Command: "Make Group 201 with Nodes 2, 3, 4"
+    void createGroup(uint8_t groupId) {
+        if (!IS_GROUP_ID(groupId)) return;
+        
+        // Find empty slot or existing slot
+        int idx = -1;
+        for(int i=0; i<5; i++) {
+            if (groups[i].id == groupId) { idx = i; break; } // Update existing
+            if (!groups[i].active && idx == -1) idx = i;     // Found empty
+        }
+
+        if (idx != -1) {
+            groups[idx].id = groupId;
+            groups[idx].active = true;
+            groups[idx].count = 0; // Reset members
+            ESP_LOGI(TAG_CONF, "Created Group %d", groupId);
+        }
+    }
+
+    void addToGroup(uint8_t groupId, uint8_t nodeId) {
+        for(int i=0; i<5; i++) {
+            if (groups[i].active && groups[i].id == groupId) {
+                if (groups[i].count < 10) {
+                    groups[i].members[groups[i].count++] = nodeId;
+                    ESP_LOGI(TAG_CONF, "Added Node %d to Group %d", nodeId, groupId);
+                }
+                return;
+            }
+        }
+    }
+
+    int getGroupMembers(uint8_t groupId, uint8_t* out_list) {
+        for(int i=0; i<5; i++) {
+            if (groups[i].active && groups[i].id == groupId) {
+                memcpy(out_list, groups[i].members, groups[i].count);
+                return groups[i].count;
+            }
+        }
+        return 0; // Group not found
+    }
+
     bool isSecure(uint8_t nodeId) {
         for(int i=0; i<MAX_PEERS; i++) {
             if (peers[i].active && peers[i].id == nodeId) return peers[i].is_secure;

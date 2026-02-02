@@ -49,7 +49,7 @@ void serial_task(void *arg) {
     uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0); uart_param_config(UART_NUM_0, &uart_config);
     char line[200]; int pos = 0;
     vTaskDelay(pdMS_TO_TICKS(3000)); 
-    ESP_LOGI("CMD", "Ready. Commands: 'reset', 'setid <n>', 'to <n>', 'init'");
+    ESP_LOGI("CMD", "Ready. Commands: 'reset', 'to <id>', 'mkgroup <id>', 'add <gid> <nid>', 'init'");
     while (1) {
         uint8_t ch;
         if (uart_read_bytes(UART_NUM_0, &ch, 1, 20/portTICK_PERIOD_MS) > 0) {
@@ -59,6 +59,21 @@ void serial_task(void *arg) {
                     line[pos] = '\0'; uart_write_bytes(UART_NUM_0, "\r\n", 2);
                     if (strcmp(line, "reset") == 0) peerMgr.resetAll();
                     else if (strncmp(line, "setid ", 6) == 0) save_node_id(atoi(&line[6]));
+                    else if (strncmp(line, "mkgroup ", 8) == 0) {
+                        int gid = atoi(&line[8]);
+                        peerMgr.createGroup(gid);
+                    }
+                    // New Command: "add 201 2" (Adds Node 2 to Group 201)
+                    else if (strncmp(line, "add ", 4) == 0) {
+                        int gid, nid;
+                        sscanf(line+4, "%d %d", &gid, &nid);
+                        peerMgr.addToGroup(gid, nid);
+                    }
+                    // Existing Command: "to 201" (Sets target)
+                    else if (strncmp(line, "to ", 3) == 0) { 
+                        current_target = atoi(&line[3]); 
+                        ESP_LOGI("CMD", "Target set to %d", current_target);
+                    }
                     else if (strncmp(line, "to ", 3) == 0) { current_target = atoi(&line[3]); ESP_LOGI("CMD", "Target: %d", current_target); }
                     else xQueueSend(tx_queue, line, 0);
                     pos = 0;
@@ -130,22 +145,43 @@ void radio_task(void *arg) {
 
         // TRANSMIT
         if (xQueueReceive(tx_queue, msg_buf, 0) == pdTRUE) {
-            if (strcmp(msg_buf, "init") == 0) {
-                 if (current_target == 255) ESP_LOGE(TAG_APP, "Set target first!");
-                 else {
-                     uint8_t pk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES]; uint8_t sk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES];
-                     PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(pk, sk); memcpy(pending_kyber_sk, sk, sizeof(sk));
-                     memcpy(large_send_buf, pk, sizeof(pk)); size_t slen;
-                     PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature(large_send_buf + sizeof(pk), &slen, pk, sizeof(pk), my_sign_sk);
-                     send_large_data(current_target, TYPE_HANDSHAKE, large_send_buf, sizeof(pk) + slen);
-                 }
+            
+            // 1. Determine Target List
+            uint8_t targets[10]; // Buffer to hold the 'To' list
+            int target_count = 0;
+
+            if (IS_GROUP_ID(current_target)) {
+                // CASE A: It is a Group -> Fetch members
+                target_count = peerMgr.getGroupMembers(current_target, targets);
+                if (target_count == 0) ESP_LOGW(TAG_APP, "Group %d is empty or doesn't exist!", current_target);
+                else ESP_LOGI(TAG_APP, "Sending to Group %d (%d members)", current_target, target_count);
             } else {
-                tx_frame.type = TYPE_CHAT; tx_frame.chunk_id = 0; tx_frame.total_chunks = 1;
+                // CASE B: It is a Single Node -> Add just one
+                targets[0] = current_target;
+                target_count = 1;
+            }
+
+            // 2. The Transmit Loop (Iterated Unicast)
+            for (int i = 0; i < target_count; i++) {
+                uint8_t dest_id = targets[i];
+
+                // Prepare Frame
+                tx_frame.type = TYPE_CHAT; 
+                tx_frame.chunk_id = 0; 
+                tx_frame.total_chunks = 1;
                 EncryptedChat_t* chat = (EncryptedChat_t*)tx_frame.payload;
-                if (ascon_encrypt(chat, (uint8_t*)msg_buf, strlen(msg_buf), peerMgr.getKey(current_target)) == 0) {
-                    tx_frame.to_id = current_target; tx_frame.from_id = my_node_id;
+
+                // Securely Encrypt for THIS SPECIFIC Node
+                // peerMgr.getKey(dest_id) returns the unique Kyber Session Key for 'dest_id'
+                if (ascon_encrypt(chat, (uint8_t*)msg_buf, strlen(msg_buf), peerMgr.getKey(dest_id)) == 0) {
+                    tx_frame.to_id = dest_id; 
+                    tx_frame.from_id = my_node_id;
                     tx_frame.data_len = (uint8_t*)chat->ciphertext - (uint8_t*)chat + chat->ct_len;
-                    radio->transmit((uint8_t*)&tx_frame, 7 + tx_frame.data_len); ESP_LOGI(TAG_APP, "Sent: %s", msg_buf);
+                    
+                    radio->transmit((uint8_t*)&tx_frame, 7 + tx_frame.data_len); 
+                    
+                    // Delay is crucial here to prevent radio jamming
+                    vTaskDelay(pdMS_TO_TICKS(150)); 
                 }
             }
             radio->startReceive();
