@@ -86,11 +86,25 @@ void radio_task(void *arg) {
         // RECEIVE
         if (hal->digitalRead(LORA_DIO0) == HIGH) {
             size_t len = radio->getPacketLength();
-            if (len > 7 && len < 256) {
+            if (len >= 7 && len < 256) { // >= 7 is critical to allow payload-less PING headers!
                 radio->readData(rx_buf, len);
                 LoRaFrame_t* rx = (LoRaFrame_t*)rx_buf;
                 if (rx->to_id == my_node_id || rx->to_id == BROADCAST_ID) {
-                    if (rx->type == TYPE_CHAT) {
+                    if (rx->type == TYPE_PING) {
+                        LoRaFrame_t ack;
+                        ack.to_id = rx->from_id;
+                        ack.from_id = my_node_id;
+                        ack.type = TYPE_PING_ACK;
+                        ack.chunk_id = 0; ack.total_chunks = 1; ack.data_len = 0;
+                        vTaskDelay(pdMS_TO_TICKS(50 + (my_node_id * 10)));
+                        radio->transmit((uint8_t*)&ack, 7);
+                        radio->startReceive();
+                        extern void discoveredContact(uint8_t);
+                        discoveredContact(rx->from_id);
+                    } else if (rx->type == TYPE_PING_ACK) {
+                        extern void discoveredContact(uint8_t);
+                        discoveredContact(rx->from_id);
+                    } else if (rx->type == TYPE_CHAT) {
                         EncryptedChat_t* chat = (EncryptedChat_t*)rx->payload;
                         uint8_t dec[200]; uint16_t dlen = 0;
                         if (ascon_decrypt(chat, dec, &dlen, peerMgr.getKey(rx->from_id)) == 0) {
@@ -158,6 +172,17 @@ void radio_task(void *arg) {
                 ESP_LOGI(TAG_CRYPTO, "Handshake sent. Waiting for ACK...");
                 radio->startReceive(); 
                 continue; 
+            }
+            else if (strcmp(msg_buf, "ping") == 0 || strcmp(msg_buf, "/ping") == 0) {
+                LoRaFrame_t frame;
+                frame.to_id = BROADCAST_ID;
+                frame.from_id = my_node_id;
+                frame.type = TYPE_PING;
+                frame.chunk_id = 0; frame.total_chunks = 1; frame.data_len = 0;
+                ESP_LOGI("CMD", "Broadcasting Ping Network Search...");
+                radio->transmit((uint8_t*)&frame, 7);
+                radio->startReceive();
+                continue;
             }
 
             // 1. Determine Target List

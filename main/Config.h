@@ -37,6 +37,8 @@
 #define TYPE_CHAT 0x01
 #define TYPE_HANDSHAKE 0x02
 #define TYPE_HANDSHAKE_ACK 0x03
+#define TYPE_PING 0x05
+#define TYPE_PING_ACK 0x06
 
 #define BROADCAST_ID 255
 #define MAX_PEERS 10

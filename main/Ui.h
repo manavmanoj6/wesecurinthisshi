@@ -17,5 +17,6 @@ public:
 void ui_init();
 void addMessage(const char* msg, bool isSelf);
 void ui_task(void *arg);
+void discoveredContact(uint8_t node_id);
 
 #endif // UI_H

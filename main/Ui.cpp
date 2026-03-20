@@ -23,22 +23,34 @@
 #endif
 
 // Premium Dark Theme Colors
-#define TH_BG 0x0821        // Very dark grey/blue
+#define TH_BG 0x0000        // Pure AMOLED Black
 #define TH_KEY 0x31A6       // Dark grey for chiclet keys
 #define TH_KEY_DARK 0x18C3  // Slightly darker for special keys
 #define TH_ACCENT 0x0419    // Vibrant iMessage Blue
 #define TH_ACCENT_GREEN 0x2506 // Send button Green
-#define TH_BAR 0x1082       // Header/Footer bar background
+#define TH_BAR 0x0000       // Pure AMOLED Black for headers
 #define TH_TEXT 0xFFFF
 #define TH_TEXT_DIM 0xCE59
 
 char logBuffer[20][80] = {0};
 int logHead = 0;
-bool isLogView = false;
+enum ViewMode { VIEW_CHAT, VIEW_LOG, VIEW_CONTACTS };
+ViewMode currentView = VIEW_CHAT;
 bool logsDirty = false;
 bool isNumKeyboard = false;
 int capsMode = 0; // 0=lower, 1=shift, 2=caps
 vprintf_like_t orig_log_vprintf = NULL;
+
+uint8_t contactList[30] = {0};
+int numContacts = 0;
+
+void discoveredContact(uint8_t node_id) {
+    for(int i=0; i<numContacts; i++) if (contactList[i] == node_id) return;
+    if (numContacts < 30) {
+        contactList[numContacts++] = node_id;
+        logsDirty = true;
+    }
+}
 
 int custom_log_vprintf(const char *fmt, va_list args) {
     char temp[120];
@@ -62,6 +74,19 @@ LGFX_Sprite chatSprite(&lcd);
 char inputBuf[200] = {0};
 int inputLen = 0;
 int chatOffsetY = 0;
+
+void drawTopBar() {
+    lcd.fillRect(0, 0, 240, 24, TH_BAR);
+    lcd.setTextColor(TH_TEXT);
+    lcd.drawString("[CHAT]", 10, 6);
+    lcd.drawString("[LOG]", 70, 6);
+    lcd.drawString("[NODES]", 130, 6);
+    if (currentView == VIEW_CHAT) {
+        char status[32]; snprintf(status, sizeof(status), "N%d:%s", current_target, peerMgr.isSecure(current_target) ? "SEC" : "UNS");
+        lcd.setTextColor(peerMgr.isSecure(current_target) ? TFT_GREEN : 0xF800); // 0xF800 is Red
+        lcd.drawString(status, 184, 6);
+    }
+}
 
 LGFX::LGFX(void) {
     {
@@ -95,7 +120,7 @@ LGFX::LGFX(void) {
         cfg.dummy_read_pixel = 8;
         cfg.dummy_read_bits  = 1;
         cfg.readable         = true;
-        cfg.invert           = true;
+        cfg.invert           = false; // Swapped to false to fix pure white background error
         cfg.rgb_order        = false;
         cfg.dlen_16bit       = false;
         cfg.bus_shared       = true;
@@ -184,27 +209,22 @@ void addMessage(const char* msg, bool isSelf) {
         chatSprite.printf("%s", msg);
     }
     chatOffsetY += 22;
-    if (!isLogView) chatSprite.pushSprite(0, 24);
+    if (currentView == VIEW_CHAT) chatSprite.pushSprite(0, 24);
 }
 
 void handleTouch(int x, int y) {
-    if (y < 20 && x < 80) { // Header touch
-        isLogView = !isLogView;
-        if (isLogView) {
+    if (y < 24) {
+        if (x < 60) currentView = VIEW_CHAT;
+        else if (x < 120) currentView = VIEW_LOG;
+        else if (x < 180) currentView = VIEW_CONTACTS;
+
+        if (currentView == VIEW_LOG || currentView == VIEW_CONTACTS) {
             lcd.fillScreen(TH_BG);
-            lcd.fillRect(0, 0, 240, 24, TH_BAR);
-            lcd.fillRoundRect(4, 3, 46, 18, 4, TH_KEY_DARK);
-            lcd.setTextColor(TH_TEXT);
-            lcd.drawString("BACK", 12, 6);
-            lcd.drawString("SYSTEM LOGS", 80, 6);
+            drawTopBar();
             logsDirty = true;
         } else {
             lcd.fillScreen(TH_BG);
-            lcd.fillRect(0, 0, 240, 24, TH_BAR);
-            lcd.fillRoundRect(4, 3, 40, 18, 4, TH_KEY_DARK);
-            lcd.setTextColor(TH_TEXT);
-            lcd.drawString("LOG", 12, 6);
-            lcd.drawString("CORTEX CHAT", 80, 6);
+            drawTopBar();
             
             chatSprite.pushSprite(0, 24);
             drawKeyboard();
@@ -216,7 +236,35 @@ void handleTouch(int x, int y) {
         return;
     }
 
-    if (isLogView) return;
+    if (currentView == VIEW_CONTACTS) {
+        for(int i=0; i<numContacts; i++) {
+            int cy = 30 + (i * 24);
+            if (y > cy && y < cy + 20) {
+                current_target = contactList[i];
+                currentView = VIEW_CHAT;
+                lcd.fillScreen(TH_BG);
+                drawTopBar();
+                chatSprite.pushSprite(0, 24);
+                drawKeyboard();
+                lcd.fillRect(0, 174, 240, 26, TH_BAR);
+                lcd.fillRoundRect(4, 177, 232, 20, 10, TH_KEY_DARK);
+                lcd.setTextColor(TH_TEXT);
+                lcd.drawString(inputBuf, 10, 180);
+                return;
+            }
+        }
+        if (y > 280) {
+            extern QueueHandle_t tx_queue;
+            char cmd[] = "/ping";
+            xQueueSend(tx_queue, cmd, 0);
+            lcd.fillRoundRect(10, 285, 220, 30, 8, TH_KEY_DARK);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            logsDirty = true;
+        }
+        return;
+    }
+
+    if (currentView == VIEW_LOG) return;
 
     if (y < 200) return;
     int yOff = 205;
@@ -299,11 +347,7 @@ void ui_init() {
     lcd.fillScreen(TH_BG);
     
     // Top Bar
-    lcd.fillRect(0, 0, 240, 24, TH_BAR);
-    lcd.fillRoundRect(4, 3, 40, 18, 4, TH_KEY_DARK);
-    lcd.setTextColor(TH_TEXT);
-    lcd.drawString("LOG", 12, 6);
-    lcd.drawString("CORTEX CHAT", 80, 6);
+    drawTopBar();
     
     chatSprite.createSprite(240, 150);
     chatSprite.fillSprite(TH_BG);
@@ -321,20 +365,47 @@ void ui_task(void *arg) {
     ui_init();
     uint16_t x, y;
     int64_t last_touch = 0;
+    int64_t last_status_upd = 0;
     while(1) {
-        if (isLogView && logsDirty) {
-            lcd.fillRect(0, 24, 240, 300, TH_BG);
-            lcd.setTextColor(TFT_GREEN);
-            int start = logHead;
-            int drawY = 25;
-            for(int i=0; i<20; i++) {
-                if (logBuffer[start][0] != 0) {
-                    lcd.drawString(logBuffer[start], 5, drawY);
-                    drawY += 15;
-                }
-                start = (start + 1) % 20;
+        if (esp_timer_get_time() / 1000 - last_status_upd > 1000) {
+            if (currentView == VIEW_CHAT) {
+                char status[32]; snprintf(status, sizeof(status), "N%d:%s", current_target, peerMgr.isSecure(current_target) ? "SEC" : "UNS");
+                lcd.fillRect(180, 0, 60, 24, TH_BAR); // Fast clear right edge
+                lcd.setTextColor(peerMgr.isSecure(current_target) ? TFT_GREEN : 0xF800);
+                lcd.drawString(status, 184, 6);
             }
-            logsDirty = false;
+            last_status_upd = esp_timer_get_time() / 1000;
+        }
+
+        if (logsDirty) {
+            if (currentView == VIEW_LOG) {
+                lcd.fillRect(0, 24, 240, 296, TH_BG);
+                lcd.setTextColor(TFT_GREEN);
+                int start = logHead;
+                int drawY = 28;
+                for(int i=0; i<20; i++) {
+                    if (logBuffer[start][0] != 0) {
+                        lcd.drawString(logBuffer[start], 5, drawY);
+                        drawY += 14;
+                    }
+                    start = (start + 1) % 20;
+                }
+                logsDirty = false;
+            } else if (currentView == VIEW_CONTACTS) {
+                lcd.fillRect(0, 24, 240, 296, TH_BG);
+                lcd.setTextColor(TH_TEXT);
+                for(int i=0; i<numContacts; i++) {
+                    int cy = 30 + (i * 24);
+                    uint16_t cardColor = (contactList[i] == current_target) ? TH_ACCENT : TH_KEY_DARK;
+                    lcd.fillRoundRect(10, cy, 220, 20, 5, cardColor);
+                    char tmp[30]; snprintf(tmp, sizeof(tmp), "Node %d", contactList[i]);
+                    lcd.drawString(tmp, 20, cy + 6);
+                }
+                lcd.fillRoundRect(10, 285, 220, 30, 8, TH_ACCENT_GREEN);
+                lcd.setTextColor(TH_TEXT);
+                lcd.drawString("BROADCAST PING", 65, 296);
+                logsDirty = false;
+            }
         }
 
         if (lcd.getTouch(&x, &y)) {
