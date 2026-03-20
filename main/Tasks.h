@@ -57,25 +57,7 @@ void serial_task(void *arg) {
             if (ch == '\r' || ch == '\n') {
                 if (pos > 0) {
                     line[pos] = '\0'; uart_write_bytes(UART_NUM_0, "\r\n", 2);
-                    if (strcmp(line, "reset") == 0) peerMgr.resetAll();
-                    else if (strncmp(line, "setid ", 6) == 0) save_node_id(atoi(&line[6]));
-                    else if (strncmp(line, "mkgroup ", 8) == 0) {
-                        int gid = atoi(&line[8]);
-                        peerMgr.createGroup(gid);
-                    }
-                    // New Command: "add 201 2" (Adds Node 2 to Group 201)
-                    else if (strncmp(line, "add ", 4) == 0) {
-                        int gid, nid;
-                        sscanf(line+4, "%d %d", &gid, &nid);
-                        peerMgr.addToGroup(gid, nid);
-                    }
-                    // Existing Command: "to 201" (Sets target)
-                    else if (strncmp(line, "to ", 3) == 0) { 
-                        current_target = atoi(&line[3]); 
-                        ESP_LOGI("CMD", "Target set to %d", current_target);
-                    }
-                    else if (strncmp(line, "to ", 3) == 0) { current_target = atoi(&line[3]); ESP_LOGI("CMD", "Target: %d", current_target); }
-                    else xQueueSend(tx_queue, line, 0);
+                    xQueueSend(tx_queue, line, 0);
                     pos = 0;
                 }
             } else if (pos < 199) line[pos++] = ch;
@@ -87,7 +69,7 @@ void radio_task(void *arg) {
     peerMgr.initIdentity();
     hal = new EspHal(LORA_SCK, LORA_MISO, LORA_MOSI); hal->init();
     radio = new SX1276(new Module(hal, LORA_NSS, LORA_DIO0, LORA_RST, LORA_DIO1));
-   ESP_LOGI(TAG_RADIO, "Connecting...");
+    ESP_LOGI(TAG_RADIO, "Connecting...");
     int state = radio->begin(868.0, 250.0, 8, 5, 0x12, 17, 8);
     while (state != RADIOLIB_ERR_NONE) {
         ESP_LOGE(TAG_RADIO, "Connection Failed! Error Code: %d", state);
@@ -111,9 +93,16 @@ void radio_task(void *arg) {
                     if (rx->type == TYPE_CHAT) {
                         EncryptedChat_t* chat = (EncryptedChat_t*)rx->payload;
                         uint8_t dec[200]; uint16_t dlen = 0;
-                        if (ascon_decrypt(chat, dec, &dlen, peerMgr.getKey(rx->from_id)) == 0)
+                        if (ascon_decrypt(chat, dec, &dlen, peerMgr.getKey(rx->from_id)) == 0) {
                             ESP_LOGI(TAG_APP, "[Node %d %s]: %s", rx->from_id, peerMgr.isSecure(rx->from_id)?"SECURE":"UNSAFE", dec);
-                        else ESP_LOGW(TAG_APP, "Auth Failed");
+                            // Ensure this matches your screen UI injection if you still want it
+                            extern void addMessage(const char* msg, bool isSelf);
+                            char displayBuf[256]; 
+                            snprintf(displayBuf, sizeof(displayBuf), "N%d: %s", rx->from_id, (char*)dec);
+                            addMessage(displayBuf, false); // Active keyboard UI
+                        } else {
+                            ESP_LOGW(TAG_APP, "Auth Failed");
+                        }
                     } else if (rx->type == TYPE_HANDSHAKE || rx->type == TYPE_HANDSHAKE_ACK) {
                         int offset = rx->chunk_id * 200;
                         if (offset + rx->data_len < sizeof(reassembly_buffer)) {
@@ -146,6 +135,31 @@ void radio_task(void *arg) {
         // TRANSMIT
         if (xQueueReceive(tx_queue, msg_buf, 0) == pdTRUE) {
             
+            // Unify Command Parsing natively on Core 1
+            if (strcmp(msg_buf, "reset") == 0) { peerMgr.resetAll(); ESP_LOGI("CMD", "Keys Reset"); continue; }
+            else if (strncmp(msg_buf, "setid ", 6) == 0) { save_node_id(atoi(&msg_buf[6])); ESP_LOGI("CMD", "ID Set"); continue; }
+            else if (strncmp(msg_buf, "mkgroup ", 8) == 0) { peerMgr.createGroup(atoi(&msg_buf[8])); ESP_LOGI("CMD", "Group created"); continue; }
+            else if (strncmp(msg_buf, "add ", 4) == 0) { 
+                int gid, nid; sscanf(msg_buf+4, "%d %d", &gid, &nid); 
+                peerMgr.addToGroup(gid, nid); ESP_LOGI("CMD", "Added Node %d to Group %d", nid, gid); continue; 
+            }
+            else if (strncmp(msg_buf, "to ", 3) == 0) { 
+                current_target = atoi(&msg_buf[3]); ESP_LOGI("CMD", "Target set to %d", current_target); continue; 
+            }
+            else if (strcmp(msg_buf, "init") == 0 || strcmp(msg_buf, "/init") == 0) {
+                if (current_target == 255 || current_target == 0) {
+                    ESP_LOGE("CMD", "Error: Set a target first using 'to <id>'");
+                    continue;
+                }
+                ESP_LOGI(TAG_CRYPTO, "Starting ML-KEM Handshake with Node %d...", current_target);
+                uint8_t pk[PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES];
+                PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(pk, pending_kyber_sk);
+                send_large_data(current_target, TYPE_HANDSHAKE, pk, sizeof(pk));
+                ESP_LOGI(TAG_CRYPTO, "Handshake sent. Waiting for ACK...");
+                radio->startReceive(); 
+                continue; 
+            }
+
             // 1. Determine Target List
             uint8_t targets[10]; // Buffer to hold the 'To' list
             int target_count = 0;
@@ -172,7 +186,6 @@ void radio_task(void *arg) {
                 EncryptedChat_t* chat = (EncryptedChat_t*)tx_frame.payload;
 
                 // Securely Encrypt for THIS SPECIFIC Node
-                // peerMgr.getKey(dest_id) returns the unique Kyber Session Key for 'dest_id'
                 if (ascon_encrypt(chat, (uint8_t*)msg_buf, strlen(msg_buf), peerMgr.getKey(dest_id)) == 0) {
                     tx_frame.to_id = dest_id; 
                     tx_frame.from_id = my_node_id;

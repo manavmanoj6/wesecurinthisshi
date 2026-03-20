@@ -25,11 +25,11 @@
 
 // --- PIN MAPPING (Standard ESP32 VSPI) ---
 // Connect your LoRa Module to these pins:
-#define LORA_SCK    18
-#define LORA_MOSI   23
-#define LORA_MISO   19
-#define LORA_NSS    5   // Chip Select (CS)
-#define LORA_RST    14  // Reset
+#define LORA_SCK    27
+#define LORA_MOSI   13
+#define LORA_MISO   12
+#define LORA_NSS    15   // Chip Select (CS)
+#define LORA_RST    16  // Reset
 #define LORA_DIO0   26  // Interrupt (IRQ)
 #define LORA_DIO1   RADIOLIB_NC // Not used
 

@@ -1,10 +1,10 @@
 # main/CMakeLists.txt
 
 idf_component_register(
-    SRCS "main.cpp"
+    SRCS "main.cpp" "Ui.cpp"
     INCLUDE_DIRS "."
     # CRITICAL: Use the EXACT folder names located in 'components/'
-    REQUIRES nvs_flash driver ascon PQClean radiolib
+    REQUIRES nvs_flash driver ascon PQClean radiolib esp_lcd LovyanGFX
 )
 
 

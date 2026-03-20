@@ -3,6 +3,7 @@
 #include "Peers.h"
 #include "Shared.h" // Ensures type safety
 #include "Tasks.h"
+#include "Ui.h"
 
 // --- DEFINITIONS OF SHARED VARIABLES ---
 EspHal* hal = NULL;
@@ -23,6 +24,13 @@ uint8_t my_sign_sk[PQCLEAN_MLDSA44_CLEAN_CRYPTO_SECRETKEYBYTES];
 
 // --- APP MAIN ---
 extern "C" void app_main(void) {
+    #include "driver/gpio.h"
+
+#define MY_PIN GPIO_NUM_21 // Change this to your pin number
+
+gpio_reset_pin(MY_PIN);
+gpio_set_direction(MY_PIN, GPIO_MODE_OUTPUT);
+gpio_set_level(MY_PIN, 1); // 1 = HIGH (3.3V), 0 = LOW (GND)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase()); ret = nvs_flash_init();
@@ -32,4 +40,5 @@ extern "C" void app_main(void) {
     tx_queue = xQueueCreate(10, 200);
     xTaskCreatePinnedToCore(radio_task, "radio", 80000, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(serial_task, "ser", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(ui_task, "ui", 4096, NULL, 4, NULL, 1);
 }
