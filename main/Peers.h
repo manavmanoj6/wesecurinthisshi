@@ -19,6 +19,9 @@ private:
         bool active;
     };
 
+    PeerEntry peers[MAX_PEERS];
+
+public:
     // NEW: Structure to hold a "Contact List" for a group
     struct GroupEntry {
         uint8_t id;             // The Group ID (e.g., 201)
@@ -27,10 +30,8 @@ private:
         bool active;
     };
 
-    PeerEntry peers[MAX_PEERS];
     GroupEntry groups[5]; // Allow up to 5 different groups
 
-public:
    PeerManager() { resetAll(); }
 
     void resetAll() {
@@ -112,16 +113,22 @@ public:
         }
     }
 
-    void addToGroup(uint8_t groupId, uint8_t nodeId) {
+    bool addToGroup(uint8_t groupId, uint8_t nodeId) {
+        if (!isSecure(nodeId)) {
+            ESP_LOGW(TAG_CONF, "Node %d is not secure! Cannot add to group.", nodeId);
+            return false;
+        }
         for(int i=0; i<5; i++) {
             if (groups[i].active && groups[i].id == groupId) {
                 if (groups[i].count < 10) {
                     groups[i].members[groups[i].count++] = nodeId;
                     ESP_LOGI(TAG_CONF, "Added Node %d to Group %d", nodeId, groupId);
+                    return true;
                 }
-                return;
+                return false;
             }
         }
+        return false;
     }
 
     int getGroupMembers(uint8_t groupId, uint8_t* out_list) {

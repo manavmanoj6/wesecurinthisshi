@@ -93,7 +93,7 @@ void drawTopBar() {
   lcd.setTextColor(TH_TEXT);
   lcd.drawString("[CHAT]", 10, 6);
   lcd.drawString("[LOG]", 70, 6);
-  lcd.drawString("[NODES]", 130, 6);
+  lcd.drawString("[PEERS]", 130, 6);
   if (currentView == VIEW_CHAT) {
     char status[32];
     snprintf(status, sizeof(status), "N%d:%s", current_target,
@@ -300,29 +300,81 @@ void handleTouch(int x, int y) {
   }
 
   if (currentView == VIEW_CONTACTS) {
+    int drawY = 30;
     for (int i = 0; i < numContacts; i++) {
-      int cy = 30 + (i * 24);
-      if (cy > 250)
+      if (drawY > 230)
         break;
-      if (y > cy && y < cy + 20) {
-        current_target = contactList[i];
-        currentView = VIEW_CHAT;
-        lcd.fillScreen(TH_BG);
-        drawTopBar();
-        drawKeyboard();
-        lcd.fillRect(0, 139, 240, 26, TH_BAR);
-        lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
-        lcd.setTextColor(TH_TEXT);
-        lcd.drawString(inputBuf, 10, 146);
-        logsDirty = true;
-        return;
+      if (y > drawY && y < drawY + 20) {
+        if (x > 185) {
+          if (current_target >= 200 && current_target <= 250 && peerMgr.isSecure(contactList[i])) {
+            char cmd[32];
+            snprintf(cmd, sizeof(cmd), "add %d %d", current_target, contactList[i]);
+            extern QueueHandle_t tx_queue;
+            xQueueSend(tx_queue, cmd, 0);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            logsDirty = true;
+          }
+          return;
+        } else {
+          current_target = contactList[i];
+          currentView = VIEW_CHAT;
+          lcd.fillScreen(TH_BG);
+          drawTopBar();
+          drawKeyboard();
+          lcd.fillRect(0, 139, 240, 26, TH_BAR);
+          lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
+          lcd.setTextColor(TH_TEXT);
+          lcd.drawString(inputBuf, 10, 146);
+          logsDirty = true;
+          return;
+        }
+      }
+      drawY += 24;
+    }
+    
+    for (int i = 0; i < 5; i++) {
+      if (peerMgr.groups[i].active) {
+        if (drawY > 230) break;
+        if (y > drawY && y < drawY + 20) {
+          current_target = peerMgr.groups[i].id;
+          currentView = VIEW_CHAT;
+          lcd.fillScreen(TH_BG);
+          drawTopBar();
+          drawKeyboard();
+          lcd.fillRect(0, 139, 240, 26, TH_BAR);
+          lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
+          lcd.setTextColor(TH_TEXT);
+          lcd.drawString(inputBuf, 10, 146);
+          logsDirty = true;
+          return;
+        }
+        drawY += 24;
       }
     }
+
     if (y > 280) {
-      extern QueueHandle_t tx_queue;
-      char cmd[] = "/ping";
-      xQueueSend(tx_queue, cmd, 0);
-      lcd.fillRoundRect(10, 280, 220, 30, 8, TH_KEY_DARK);
+      if (x < 120) {
+        extern QueueHandle_t tx_queue;
+        char cmd[] = "/ping";
+        xQueueSend(tx_queue, cmd, 0);
+        lcd.fillRoundRect(10, 280, 105, 30, 8, TH_KEY_DARK);
+      } else {
+        extern QueueHandle_t tx_queue;
+        int nextId = 200;
+        for (int i = 200; i <= 250; i++) {
+          bool exists = false;
+          for (int j = 0; j < 5; j++) {
+            if (peerMgr.groups[j].active && peerMgr.groups[j].id == i) {
+              exists = true; break;
+            }
+          }
+          if (!exists) { nextId = i; break; }
+        }
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "mkgroup %d", nextId);
+        xQueueSend(tx_queue, cmd, 0);
+        lcd.fillRoundRect(125, 280, 105, 30, 8, TH_KEY_DARK);
+      }
       vTaskDelay(pdMS_TO_TICKS(50));
       logsDirty = true;
     }
@@ -466,20 +518,44 @@ void ui_task(void *arg) {
       } else if (currentView == VIEW_CONTACTS) {
         lcd.fillRect(0, 24, 240, 296, TH_BG);
         lcd.setTextColor(TH_TEXT);
+        int drawY = 30;
         for (int i = 0; i < numContacts; i++) {
-          int cy = 30 + (i * 24);
-          if (cy > 250)
+          if (drawY > 230)
             break;
           uint16_t cardColor =
               (contactList[i] == current_target) ? TH_ACCENT : TH_KEY_DARK;
-          lcd.fillRoundRect(10, cy, 220, 20, 5, cardColor);
+          lcd.fillRoundRect(10, drawY, 175, 20, 5, cardColor);
           char tmp[30];
           snprintf(tmp, sizeof(tmp), "Node %d", contactList[i]);
-          lcd.drawString(tmp, 20, cy + 6);
+          lcd.drawString(tmp, 20, drawY + 6);
+          
+          if (current_target >= 200 && current_target <= 250) {
+            if (peerMgr.isSecure(contactList[i])) {
+              lcd.fillRoundRect(190, drawY, 40, 20, 5, TH_ACCENT_GREEN);
+              lcd.setTextColor(TH_TEXT);
+              lcd.drawString("[+]", 200, drawY + 6);
+              lcd.setTextColor(TH_TEXT);
+            }
+          }
+          drawY += 24;
         }
-        lcd.fillRoundRect(10, 280, 220, 30, 8, TH_ACCENT_GREEN);
-        lcd.setTextColor(TH_TEXT);
-        lcd.drawString("BROADCAST PING", 60, 289);
+
+        for (int i = 0; i < 5; i++) {
+          if (peerMgr.groups[i].active) {
+            if (drawY > 230) break;
+            uint16_t cardColor = (peerMgr.groups[i].id == current_target) ? TH_ACCENT : TH_KEY_DARK;
+            lcd.fillRoundRect(10, drawY, 220, 20, 5, cardColor);
+            char tmp[30];
+            snprintf(tmp, sizeof(tmp), "Group %d (%d)", peerMgr.groups[i].id, peerMgr.groups[i].count);
+            lcd.drawString(tmp, 20, drawY + 6);
+            drawY += 24;
+          }
+        }
+
+        lcd.fillRoundRect(10, 280, 105, 30, 8, TH_ACCENT_GREEN);
+        lcd.drawString("PING ALL", 37, 289);
+        lcd.fillRoundRect(125, 280, 105, 30, 8, TH_ACCENT);
+        lcd.drawString("NEW GRP", 152, 289);
         logsDirty = false;
       }
     }
