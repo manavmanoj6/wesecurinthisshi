@@ -307,7 +307,7 @@ void handleTouch(int x, int y) {
       if (y > drawY && y < drawY + 20) {
         if (x > 185) {
           if (current_target >= 200 && current_target <= 250 && peerMgr.isSecure(contactList[i])) {
-            char cmd[32];
+            char cmd[200] = {0};
             snprintf(cmd, sizeof(cmd), "add %d %d", current_target, contactList[i]);
             extern QueueHandle_t tx_queue;
             xQueueSend(tx_queue, cmd, 0);
@@ -355,7 +355,8 @@ void handleTouch(int x, int y) {
     if (y > 280) {
       if (x < 120) {
         extern QueueHandle_t tx_queue;
-        char cmd[] = "/ping";
+        char cmd[200] = {0};
+        strcpy(cmd, "/ping");
         xQueueSend(tx_queue, cmd, 0);
         lcd.fillRoundRect(10, 280, 105, 30, 8, TH_KEY_DARK);
       } else {
@@ -370,7 +371,7 @@ void handleTouch(int x, int y) {
           }
           if (!exists) { nextId = i; break; }
         }
-        char cmd[32];
+        char cmd[200] = {0};
         snprintf(cmd, sizeof(cmd), "mkgroup %d", nextId);
         xQueueSend(tx_queue, cmd, 0);
         lcd.fillRoundRect(125, 280, 105, 30, 8, TH_KEY_DARK);

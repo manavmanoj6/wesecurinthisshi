@@ -154,8 +154,16 @@ void radio_task(void *arg) {
             else if (strncmp(msg_buf, "setid ", 6) == 0) { save_node_id(atoi(&msg_buf[6])); ESP_LOGI("CMD", "ID Set"); continue; }
             else if (strncmp(msg_buf, "mkgroup ", 8) == 0) { peerMgr.createGroup(atoi(&msg_buf[8])); ESP_LOGI("CMD", "Group created"); continue; }
             else if (strncmp(msg_buf, "add ", 4) == 0) { 
-                int gid, nid; sscanf(msg_buf+4, "%d %d", &gid, &nid); 
-                peerMgr.addToGroup(gid, nid); ESP_LOGI("CMD", "Added Node %d to Group %d", nid, gid); continue; 
+                int gid = 0, nid = 0; 
+                int parsed = sscanf(msg_buf+4, "%d %d", &gid, &nid); 
+                if (parsed == 2) {
+                    if (peerMgr.addToGroup(gid, nid)) {
+                        ESP_LOGI("CMD", "Added Node %d to Group %d", nid, gid); 
+                    }
+                } else {
+                    ESP_LOGE("CMD", "Parse error: expected 'add <gid> <nid>', got '%s'", msg_buf);
+                }
+                continue; 
             }
             else if (strncmp(msg_buf, "to ", 3) == 0) { 
                 current_target = atoi(&msg_buf[3]); ESP_LOGI("CMD", "Target set to %d", current_target); continue; 
