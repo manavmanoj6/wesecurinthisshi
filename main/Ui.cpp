@@ -22,15 +22,42 @@
 #define TFT_DARKGREY 0x4A69
 #endif
 
-// Premium Dark Theme Colors
-#define TH_BG 0x0000           // Pure AMOLED Black
-#define TH_KEY 0x31A6          // Dark grey for chiclet keys
-#define TH_KEY_DARK 0x18C3     // Slightly darker for special keys
-#define TH_ACCENT 0x0419       // Vibrant iMessage Blue
-#define TH_ACCENT_GREEN 0x2506 // Send button Green
-#define TH_BAR 0x0000          // Pure AMOLED Black for headers
-#define TH_TEXT 0xFFFF
-#define TH_TEXT_DIM 0xCE59
+// Funky Theme Colors
+#define TH_BG 0x6018           // Funky Purple
+#define TH_KEY 0xFB00          // Neon Orange
+#define TH_KEY_DARK 0xF81F     // Hot Pink
+#define TH_ACCENT 0x07FF       // Cyan
+#define TH_ACCENT_GREEN 0x07E0 // Lime Green
+#define TH_BAR 0x001F          // Deep Blue
+#define TH_TEXT 0xFFFF         // White
+#define TH_TEXT_DIM 0xFFE0     // Yellow
+
+uint16_t getRainbowColor(int screenY) {
+    if (screenY < 0) screenY = 0;
+    if (screenY > 239) screenY = 239;
+    int phase = (screenY * 1536) / 240;
+    int h = phase / 256;
+    int f = phase % 256;
+    int q = 255 - f;
+    int r = 0, g = 0, b = 0;
+    switch(h) {
+        case 0: r = 255; g = f; b = 0; break;
+        case 1: r = q; g = 255; b = 0; break;
+        case 2: r = 0; g = 255; b = f; break;
+        case 3: r = 0; g = q; b = 255; break;
+        case 4: r = f; g = 0; b = 255; break;
+        case 5: r = 255; g = 0; b = q; break;
+    }
+    r /= 3; g /= 3; b /= 3; // Darken for background readability
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+}
+
+template <typename T>
+void drawRainbowBg(T* d, int x, int y, int w, int h, int screenY_offset) {
+    for (int i = 0; i < h; i++) {
+        d->drawFastHLine(x, y + i, w, getRainbowColor(screenY_offset + i));
+    }
+}
 
 char logBuffer[100][80] = {0};
 int logHead = 0;
@@ -88,19 +115,23 @@ char inputBuf[200] = {0};
 int inputLen = 0;
 int chatOffsetY = 0;
 
+void fillScreenRainbow() {
+    drawRainbowBg(&lcd, 0, 0, 320, 240, 0);
+}
+
 void drawTopBar() {
-  lcd.fillRect(0, 0, 240, 24, TH_BAR);
+  lcd.fillRect(0, 0, 320, 24, TH_BAR);
   lcd.setTextColor(TH_TEXT);
   lcd.drawString("[CHAT]", 10, 6);
-  lcd.drawString("[LOG]", 70, 6);
-  lcd.drawString("[PEERS]", 130, 6);
+  lcd.drawString("[LOG]", 100, 6);
+  lcd.drawString("[PEERS]", 190, 6);
   if (currentView == VIEW_CHAT) {
     char status[32];
     snprintf(status, sizeof(status), "N%d:%s", current_target,
              peerMgr.isSecure(current_target) ? "SEC" : "UNS");
     lcd.setTextColor(
         peerMgr.isSecure(current_target) ? TFT_GREEN : 0xF800); // 0xF800 is Red
-    lcd.drawString(status, 184, 6);
+    lcd.drawString(status, 260, 6);
   }
 }
 
@@ -165,47 +196,47 @@ LGFX::LGFX(void) {
 }
 
 void drawKeyboard() {
-  lcd.fillRect(0, 165, 240, 155, TH_BG);
+  drawRainbowBg(&lcd, 0, 124, 320, 116, 124);
   const char *rowsAlphaUpper[3] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
   const char *rowsAlphaLower[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
   const char *rowsNum[3] = {"1234567890", "@#%&*-+()!", ".,:;'\"/?"};
   const char **rows = isNumKeyboard
                           ? rowsNum
                           : ((capsMode > 0) ? rowsAlphaUpper : rowsAlphaLower);
-  int yOff = 165;
+  int yOff = 124;
   for (int r = 0; r < 3; r++) {
     int keys = strlen(rows[r]);
-    int kw = 240 / keys;
+    int kw = 320 / keys;
     for (int c = 0; c < keys; c++) {
       int x = c * kw;
-      int y = yOff + (r * 38);
-      lcd.fillRoundRect(x + 1, y + 1, kw - 2, 36, 6, TH_KEY); // Reduced padding
-      lcd.setCursor(x + kw / 2 - 4, y + 10);
+      int y = yOff + (r * 29);
+      lcd.fillRoundRect(x + 1, y + 1, kw - 2, 27, 4, TH_KEY);
+      lcd.setCursor(x + kw / 2 - 4, y + 6);
       lcd.setTextColor(TH_TEXT);
       lcd.printf("%c", rows[r][c]);
     }
   }
-  int bW = 48;
-  int bY = yOff + 114;
-  lcd.fillRoundRect(1, bY + 1, bW - 2, 36, 7, TH_KEY_DARK);
+  int bW = 64; // 320 / 5
+  int bY = yOff + 87; // 3 * 29
+  lcd.fillRoundRect(1, bY + 1, bW - 2, 27, 4, TH_KEY_DARK);
   lcd.setTextColor(TH_TEXT);
-  lcd.drawString(isNumKeyboard ? "ABC" : "123", 14, bY + 12);
+  lcd.drawString(isNumKeyboard ? "ABC" : "123", 22, bY + 8);
 
-  lcd.fillRoundRect(bW + 1, bY + 1, bW - 2, 36, 7,
+  lcd.fillRoundRect(bW + 1, bY + 1, bW - 2, 27, 4,
                     capsMode > 0 ? TH_ACCENT : TH_KEY_DARK);
   const char *shfLbl =
       (capsMode == 0) ? "shf" : ((capsMode == 1) ? "SHF" : "CAP");
   if (!isNumKeyboard)
-    lcd.drawString(shfLbl, bW + 20, bY + 6);
+    lcd.drawString(shfLbl, bW + 20, bY + 8);
 
-  lcd.fillRoundRect(bW * 2 + 1, bY + 1, bW - 2, 25, 4, TH_KEY);
-  lcd.drawString("SPC", bW * 2 + 20, bY + 6);
+  lcd.fillRoundRect(bW * 2 + 1, bY + 1, bW - 2, 27, 4, TH_KEY);
+  lcd.drawString("SPC", bW * 2 + 20, bY + 8);
 
-  lcd.fillRoundRect(bW * 3 + 1, bY + 1, bW - 2, 25, 4, TH_KEY_DARK);
-  lcd.drawString("DEL", bW * 3 + 20, bY + 6);
+  lcd.fillRoundRect(bW * 3 + 1, bY + 1, bW - 2, 27, 4, TH_KEY_DARK);
+  lcd.drawString("DEL", bW * 3 + 20, bY + 8);
 
-  lcd.fillRoundRect(bW * 4 + 1, bY + 1, bW - 2, 25, 4, TH_ACCENT_GREEN);
-  lcd.drawString("SND", bW * 4 + 20, bY + 6);
+  lcd.fillRoundRect(bW * 4 + 1, bY + 1, bW - 2, 27, 4, TH_ACCENT_GREEN);
+  lcd.drawString("SND", bW * 4 + 20, bY + 8);
 }
 
 void addMessage(const char *msg, bool isSelf) {
@@ -226,20 +257,20 @@ void addMessage(const char *msg, bool isSelf) {
 }
 
 void drawChatMessages() {
-  chatSprite.fillSprite(TH_BG);
-  int drawY = 115 - 22 + chatScrollY; 
+  drawRainbowBg(&chatSprite, 0, 0, 320, 80, 24);
+  int drawY = 80 - 22 + chatScrollY; 
   for(int i = chatCount -1; i >= 0; i--) {
     if (drawY + 22 < 0) break;
-    if (drawY >= 115) { drawY -= 22; continue; }
+    if (drawY >= 80) { drawY -= 22; continue; }
     
     int len = strlen(chatHistory[i]);
     int tw = (len * 6) + 12;
-    if (tw > 220) tw = 220;
+    if (tw > 300) tw = 300;
     
     if (chatIsSelf[i]) {
-      chatSprite.fillRoundRect(236 - tw, drawY, tw, 18, 5, TH_ACCENT);
+      chatSprite.fillRoundRect(316 - tw, drawY, tw, 18, 5, TH_ACCENT);
       chatSprite.setTextColor(TH_TEXT);
-      chatSprite.setCursor(236 - tw + 6, drawY + 5);
+      chatSprite.setCursor(316 - tw + 6, drawY + 5);
       chatSprite.printf("%s", chatHistory[i]);
     } else {
       chatSprite.fillRoundRect(4, drawY, tw, 18, 5, TH_KEY_DARK);
@@ -253,18 +284,18 @@ void drawChatMessages() {
 }
 
 void drawLogs() {
-  lcd.fillRect(0, 24, 240, 296, TH_BG);
+  drawRainbowBg(&lcd, 0, 24, 320, 216, 24);
   lcd.setTextColor(TFT_GREEN);
   
   int maxLog = (logCount < 100) ? logCount : 100;
-  int drawY = 296 - 14 + logScrollY;
+  int drawY = 216 - 14 + logScrollY;
   
   lcd.startWrite();
   for (int i = 0; i < maxLog; i++) {
     if (drawY + 14 <= 24) break;
     
     int idx = (logHead - 1 - i + 100) % 100;
-    if (drawY < 320) {
+    if (drawY < 240) {
       lcd.drawString(logBuffer[idx], 5, drawY);
     }
     drawY -= 14;
@@ -274,26 +305,26 @@ void drawLogs() {
 
 void handleTouch(int x, int y) {
   if (y < 24) {
-    if (x < 70)
+    if (x < 100)
       currentView = VIEW_CHAT;
-    else if (x < 130)
+    else if (x < 190)
       currentView = VIEW_LOG;
-    else if (x < 240)
+    else if (x < 320)
       currentView = VIEW_CONTACTS;
 
     if (currentView == VIEW_LOG || currentView == VIEW_CONTACTS) {
-      lcd.fillScreen(TH_BG);
+      fillScreenRainbow();
       drawTopBar();
       logsDirty = true;
     } else {
-      lcd.fillScreen(TH_BG);
+      fillScreenRainbow();
       drawTopBar();
 
       drawKeyboard();
-      lcd.fillRect(0, 139, 240, 26, TH_BAR);
-      lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
+      lcd.fillRect(0, 104, 320, 20, TH_BAR);
+      lcd.fillRoundRect(4, 106, 312, 16, 8, TH_KEY_DARK);
       lcd.setTextColor(TH_TEXT);
-      lcd.drawString(inputBuf, 10, 146);
+      lcd.drawString(inputBuf, 10, 110);
       logsDirty = true;
     }
     return;
@@ -302,10 +333,10 @@ void handleTouch(int x, int y) {
   if (currentView == VIEW_CONTACTS) {
     int drawY = 30;
     for (int i = 0; i < numContacts; i++) {
-      if (drawY > 230)
+      if (drawY > 180)
         break;
       if (y > drawY && y < drawY + 20) {
-        if (x > 185) {
+        if (x > 260) {
           if (current_target >= 200 && current_target <= 250 && peerMgr.isSecure(contactList[i])) {
             char cmd[200] = {0};
             snprintf(cmd, sizeof(cmd), "add %d %d", current_target, contactList[i]);
@@ -318,7 +349,7 @@ void handleTouch(int x, int y) {
         } else {
           current_target = contactList[i];
           currentView = VIEW_CHAT;
-          lcd.fillScreen(TH_BG);
+          fillScreenRainbow();
           drawTopBar();
           drawKeyboard();
           lcd.fillRect(0, 139, 240, 26, TH_BAR);
@@ -334,11 +365,11 @@ void handleTouch(int x, int y) {
     
     for (int i = 0; i < 5; i++) {
       if (peerMgr.groups[i].active) {
-        if (drawY > 230) break;
+        if (drawY > 180) break;
         if (y > drawY && y < drawY + 20) {
           current_target = peerMgr.groups[i].id;
           currentView = VIEW_CHAT;
-          lcd.fillScreen(TH_BG);
+          fillScreenRainbow();
           drawTopBar();
           drawKeyboard();
           lcd.fillRect(0, 139, 240, 26, TH_BAR);
@@ -352,13 +383,13 @@ void handleTouch(int x, int y) {
       }
     }
 
-    if (y > 280) {
+    if (y > 200) {
       if (x < 120) {
         extern QueueHandle_t tx_queue;
         char cmd[200] = {0};
         strcpy(cmd, "/ping");
         xQueueSend(tx_queue, cmd, 0);
-        lcd.fillRoundRect(10, 280, 105, 30, 8, TH_KEY_DARK);
+        lcd.fillRoundRect(10, 200, 140, 30, 8, TH_KEY_DARK);
       } else {
         extern QueueHandle_t tx_queue;
         int nextId = 200;
@@ -374,7 +405,7 @@ void handleTouch(int x, int y) {
         char cmd[200] = {0};
         snprintf(cmd, sizeof(cmd), "mkgroup %d", nextId);
         xQueueSend(tx_queue, cmd, 0);
-        lcd.fillRoundRect(125, 280, 105, 30, 8, TH_KEY_DARK);
+        lcd.fillRoundRect(160, 200, 140, 30, 8, TH_KEY_DARK);
       }
       vTaskDelay(pdMS_TO_TICKS(50));
       logsDirty = true;
@@ -385,9 +416,9 @@ void handleTouch(int x, int y) {
   if (currentView == VIEW_LOG)
     return;
 
-  if (y < 165)
+  if (y < 124)
     return;
-  int yOff = 165;
+  int yOff = 124;
   char pressed = 0;
   const char *rowsAlphaUpper[3] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
   const char *rowsAlphaLower[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
@@ -396,21 +427,21 @@ void handleTouch(int x, int y) {
                           ? rowsNum
                           : ((capsMode > 0) ? rowsAlphaUpper : rowsAlphaLower);
 
-  if (y > yOff && y < yOff + 38) {
+  if (y > yOff && y < yOff + 29) {
     int keys = strlen(rows[0]);
-    int kw = 240 / keys;
+    int kw = 320 / keys;
     pressed = rows[0][x / kw];
-  } else if (y > yOff + 38 && y < yOff + 76) {
+  } else if (y > yOff + 29 && y < yOff + 58) {
     int keys = strlen(rows[1]);
-    int kw = 240 / keys;
+    int kw = 320 / keys;
     pressed = rows[1][x / kw];
-  } else if (y > yOff + 76 && y < yOff + 114) {
+  } else if (y > yOff + 58 && y < yOff + 87) {
     int keys = strlen(rows[2]);
-    if (x < 240 / keys * keys) {
-      int kw = 240 / keys;
+    if (x < 320 / keys * keys) {
+      int kw = 320 / keys;
       pressed = rows[2][x / kw];
     }
-  } else if (y > yOff + 114) {
+  } else if (y > yOff + 87) {
     int bW = 48;
     if (x < bW) {
       isNumKeyboard = !isNumKeyboard;
@@ -456,33 +487,33 @@ void handleTouch(int x, int y) {
     }
   }
 
-  lcd.fillRect(0, 139, 240, 26, TH_BAR);
-  lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
+  lcd.fillRect(0, 104, 320, 20, TH_BAR);
+  lcd.fillRoundRect(4, 106, 312, 16, 8, TH_KEY_DARK);
   lcd.setTextColor(TH_TEXT);
-  lcd.drawString(inputBuf, 10, 146);
+  lcd.drawString(inputBuf, 10, 110);
 
   // Visual feedback for touch
   lcd.fillCircle(x, y, 8, TH_ACCENT);
   vTaskDelay(pdMS_TO_TICKS(40));
   drawKeyboard(); // redraw fully to cleanly erase footprint
   // redraw input bar
-  lcd.fillRect(0, 139, 240, 26, TH_BAR);
-  lcd.fillRoundRect(4, 141, 232, 22, 11, TH_KEY_DARK);
+  lcd.fillRect(0, 104, 320, 20, TH_BAR);
+  lcd.fillRoundRect(4, 106, 312, 16, 8, TH_KEY_DARK);
   lcd.setTextColor(TH_TEXT);
-  lcd.drawString(inputBuf, 10, 146);
+  lcd.drawString(inputBuf, 10, 110);
 }
 
 void ui_init() {
   orig_log_vprintf = esp_log_set_vprintf(custom_log_vprintf);
 
   lcd.init();
-  lcd.setRotation(0);
-  lcd.fillScreen(TH_BG);
+  lcd.setRotation(1);
+  fillScreenRainbow();
 
   // Top Bar
   drawTopBar();
 
-  chatSprite.createSprite(240, 115);
+  chatSprite.createSprite(320, 80);
   addMessage("Connected safely.", false);
   drawChatMessages();
 
@@ -502,9 +533,9 @@ void ui_task(void *arg) {
         char status[32];
         snprintf(status, sizeof(status), "N%d:%s", current_target,
                  peerMgr.isSecure(current_target) ? "SEC" : "UNS");
-        lcd.fillRect(180, 0, 60, 24, TH_BAR); // Fast clear right edge
+        lcd.fillRect(250, 0, 70, 24, TH_BAR); // Fast clear right edge
         lcd.setTextColor(peerMgr.isSecure(current_target) ? TFT_GREEN : 0xF800);
-        lcd.drawString(status, 184, 6);
+        lcd.drawString(status, 260, 6);
       }
       last_status_upd = esp_timer_get_time() / 1000;
     }
@@ -517,24 +548,24 @@ void ui_task(void *arg) {
         drawChatMessages();
         logsDirty = false;
       } else if (currentView == VIEW_CONTACTS) {
-        lcd.fillRect(0, 24, 240, 296, TH_BG);
+        drawRainbowBg(&lcd, 0, 24, 320, 216, 24);
         lcd.setTextColor(TH_TEXT);
         int drawY = 30;
         for (int i = 0; i < numContacts; i++) {
-          if (drawY > 230)
+          if (drawY > 180)
             break;
           uint16_t cardColor =
               (contactList[i] == current_target) ? TH_ACCENT : TH_KEY_DARK;
-          lcd.fillRoundRect(10, drawY, 175, 20, 5, cardColor);
+          lcd.fillRoundRect(10, drawY, 240, 20, 5, cardColor);
           char tmp[30];
           snprintf(tmp, sizeof(tmp), "Node %d", contactList[i]);
           lcd.drawString(tmp, 20, drawY + 6);
           
           if (current_target >= 200 && current_target <= 250) {
             if (peerMgr.isSecure(contactList[i])) {
-              lcd.fillRoundRect(190, drawY, 40, 20, 5, TH_ACCENT_GREEN);
+              lcd.fillRoundRect(260, drawY, 40, 20, 5, TH_ACCENT_GREEN);
               lcd.setTextColor(TH_TEXT);
-              lcd.drawString("[+]", 200, drawY + 6);
+              lcd.drawString("[+]", 270, drawY + 6);
               lcd.setTextColor(TH_TEXT);
             }
           }
@@ -543,9 +574,9 @@ void ui_task(void *arg) {
 
         for (int i = 0; i < 5; i++) {
           if (peerMgr.groups[i].active) {
-            if (drawY > 230) break;
+            if (drawY > 180) break;
             uint16_t cardColor = (peerMgr.groups[i].id == current_target) ? TH_ACCENT : TH_KEY_DARK;
-            lcd.fillRoundRect(10, drawY, 220, 20, 5, cardColor);
+            lcd.fillRoundRect(10, drawY, 300, 20, 5, cardColor);
             char tmp[30];
             snprintf(tmp, sizeof(tmp), "Group %d (%d)", peerMgr.groups[i].id, peerMgr.groups[i].count);
             lcd.drawString(tmp, 20, drawY + 6);
@@ -553,10 +584,10 @@ void ui_task(void *arg) {
           }
         }
 
-        lcd.fillRoundRect(10, 280, 105, 30, 8, TH_ACCENT_GREEN);
-        lcd.drawString("PING ALL", 37, 289);
-        lcd.fillRoundRect(125, 280, 105, 30, 8, TH_ACCENT);
-        lcd.drawString("NEW GRP", 152, 289);
+        lcd.fillRoundRect(10, 200, 140, 30, 8, TH_ACCENT_GREEN);
+        lcd.drawString("PING ALL", 45, 209);
+        lcd.fillRoundRect(160, 200, 140, 30, 8, TH_ACCENT);
+        lcd.drawString("NEW GRP", 195, 209);
         logsDirty = false;
       }
     }
@@ -578,14 +609,14 @@ void ui_task(void *arg) {
           if (currentView == VIEW_LOG) {
             logScrollY += dy;
             if (logScrollY < 0) logScrollY = 0;
-            int maxScr = (logCount * 14) - 296 + 14;
+            int maxScr = (logCount * 14) - 216 + 14;
             if (maxScr < 0) maxScr = 0;
             if (logScrollY > maxScr) logScrollY = maxScr;
             logsDirty = true;
-          } else if (currentView == VIEW_CHAT && y < 139) {
+          } else if (currentView == VIEW_CHAT && y < 104) {
             chatScrollY += dy;
             if (chatScrollY < 0) chatScrollY = 0;
-            int maxScr = (chatCount * 22) - 115;
+            int maxScr = (chatCount * 22) - 80;
             if (maxScr < 0) maxScr = 0;
             if (chatScrollY > maxScr) chatScrollY = maxScr;
             logsDirty = true;
